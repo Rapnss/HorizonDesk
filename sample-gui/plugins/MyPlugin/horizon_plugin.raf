@@ -1,0 +1,8 @@
+{
+    "name": "MyPlugin",
+    "version": "1.0.0",
+    "developer": "Aarav Kushwaha",
+    "description": "A specialized plugin for MyPlugin",
+    "entry_point": "main.py",
+    "category": "general"
+}

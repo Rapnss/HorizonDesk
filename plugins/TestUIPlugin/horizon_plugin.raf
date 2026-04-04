@@ -1,0 +1,10 @@
+{
+  "name": "Test UI Plugin",
+  "version": "1.0.0",
+  "developer": "Horizon Team",
+  "entry_point": "main.py",
+  "custom_ui": true,
+  "custom_ui_path": "ui",
+  "icon": "icon.png",
+  "description": "Verification plugin for Custom UI Tabs with Icon"
+}

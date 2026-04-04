@@ -1,0 +1,8 @@
+{
+    "name": "SamplePlugin",
+    "version": "1.0.0",
+    "developer": "Horizon Desk User",
+    "description": "A sample plugin with a simple calculator tool.",
+    "entry_point": "main.py",
+    "category": "utilities"
+}

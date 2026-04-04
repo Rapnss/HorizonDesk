@@ -1,0 +1,7 @@
+{
+    "name": "FinanceBotIntegration",
+    "version": "1.0.0",
+    "developer": "Horizon User",
+    "description": "Connects to a third party API.",
+    "entry_point": "main.py"
+}

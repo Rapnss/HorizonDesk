@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/x-icon" href="/logo.ico" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Horizon Desk</title>
+  
+  <!-- OneSignal SDK -->
+  <script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+  <script>
+    window.OneSignalDeferred = window.OneSignalDeferred || [];
+    OneSignalDeferred.push(async function(OneSignal) {
+      await OneSignal.init({
+        appId: "cb15fa81-cdd3-4f20-8798-900f6dab0e3a",
+        safari_web_id: "web.onesignal.auto.2eb2c68e-185f-43c2-9c38-4f330d99aa4c",
+        notifyButton: {
+          enable: false, // User requested to hide the red bell icon
+        },
+        allowLocalhostAsSecureOrigin: true,
+      });
+      
+      // Global helpers to trigger OneSignal from React
+      window.triggerNotificationPrompt = function() {
+        console.log("[OneSignal] Triggering custom registration prompt...");
+        if (window.OneSignal) {
+          window.OneSignal.push(["registerForPushNotifications"]);
+        }
+      };
+      
+      window.setNotificationSubscription = function(enabled) {
+        console.log("[OneSignal] Setting subscription status:", enabled);
+        if (window.OneSignal) {
+          window.OneSignal.push(["setSubscription", enabled]);
+        }
+      };
+    });
+  </script>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+
+</html>

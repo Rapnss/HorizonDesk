@@ -1,0 +1,5 @@
+requests
+pywebview
+colorama
+python-dotenv
+psutil

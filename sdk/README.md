@@ -1,0 +1,76 @@
+# horizondesk-sdk SDK v1.2.0 🚀
+
+This SDK provides the official interface for building plugins for **Horizon Desk**. It allows developers to extend the app's capabilities with custom tools and **dedicated sidebar tabs**.
+
+## What's New in v1.2.0
+- **Custom UI Tabs:** Build your own interface using HTML/JS and embed it directly in the sidebar.
+- **Improved Scaffolding:** `init` now supports UI-enabled templates.
+- **Enhanced base.py:** Native support for `custom_ui`, `custom_ui_path`, and `icon` in `HorizonPlugin` class.
+
+## Installation
+```bash
+pip install horizondesk-sdk
+```
+
+## Quick Start: Create your first plugin
+
+### 1. Initialize
+Run the following command to scaffold a new plugin project:
+```bash
+horizondesk-sdk init MyAmazingPlugin
+```
+
+### 2. Define a Tool & UI
+Edit `main.py` and specify your `custom_ui` and `icon`:
+```python
+from horizondesk_sdk import BaseTool, HorizonPlugin
+
+class WeatherTool(BaseTool):
+    def __init__(self):
+        super().__init__("GetWeather", "Gets current weather...")
+
+    def execute(self, city=None, payload=None):
+        return f"Weather result..."
+
+def register_plugins(agent):
+    # Setting custom_ui=True adds a new tab to the Horizon Desk sidebar
+    plugin = HorizonPlugin(
+        "MyAmazingPlugin", 
+        version="1.2.0",
+        custom_ui=True,
+        custom_ui_path="ui",
+        icon="icon.png"  # Relative path to your 128x128 PNG icon
+    )
+    plugin.add_tool(WeatherTool())
+    plugin.register_all(agent)
+```
+
+### 3. Create your UI & Icon
+- **UI**: Place an `index.html` file inside the `ui` folder.
+- **Icon**: Add a `.png` file for your sidebar icon.
+    - **Min Size**: 32x32 px
+    - **Max Size**: 512x512 px
+    - **Recommended**: 128x128 px (Transparent PNG)
+
+Horizon Desk will automatically serve these files and render your icon in the sidebar.
+
+## Available CLI Commands
+
+| Command | Description |
+| ------- | ----------- |
+| `init <name>` | Scaffolds a new plugin with a basic template. |
+| `run <file.raf>` | Launches the high-fidelity GUI Workshop to test your plugin visually. |
+| `test [--prompt]` | Runs a fast CLI-based agent test against your plugin. |
+| `install` | Installs the current plugin into your local Horizon Desk application. |
+| `publish` | Packages and publishes the current plugin to the Horizon Store. |
+| `status` | Lists all your currently published plugins. |
+
+## Security & Privacy
+- **SecretStorage**: Always use `SecretStorage.get_secret("KEY")` to access API keys.
+- **Redaction**: Use `SecretStorage.redact_pii(text)` before sending data to external workers.
+- **Auditing**: All plugin tools and UI views are subject to manual intervention (Alt+F7).
+
+## Support
+Join our developer community:
+- **Discord/WhatsApp**: Links available in the Developer Dashboard.
+- **Issues**: [GitHub Issues](https://github.com/rapnss/horizondesk-sdk/issues)
