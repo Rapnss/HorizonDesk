@@ -217,7 +217,6 @@ def handle_login():
         print(Fore.WHITE + f"  Welcome, {data['user']['username']}!")
         print(Fore.WHITE + f"  Developer ID: {data['developer']['id']}")
         print(Fore.WHITE + f"  Free releases: {data['developer']['free_releases_left']}")
-        print(Fore.WHITE + f"  Ad balance: ${data['developer']['ad_balance']:.2f}")
         print()
 
     except Exception as e:
@@ -247,7 +246,6 @@ def handle_whoami():
     print(Fore.WHITE + f"  User ID:      {user.get('id', '—')}")
     print(Fore.WHITE + f"  Developer ID: {dev.get('id', '—')}")
     print(Fore.WHITE + f"  Free releases: {dev.get('free_releases_left', 0)}")
-    print(Fore.WHITE + f"  Ad balance:   ${dev.get('ad_balance', 0):.2f}")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -382,7 +380,6 @@ def handle_status():
         print(Fore.CYAN + "║    Your Published Plugins            ║")
         print(Fore.CYAN + "╚══════════════════════════════════════╝")
         print(Fore.WHITE + f"  Free releases left: {dev.get('free_releases_left', 0)}")
-        print(Fore.WHITE + f"  Ad balance: ${dev.get('ad_balance', 0):.2f}")
         print()
 
         if not plugins:
@@ -481,13 +478,14 @@ def handle_test(prompt):
             print(Fore.RED + "Warning: .env not found. Agent may fail if it needs API keys.")
 
         try:
-            from core.agent import Agent
-            from core.input_manager import InputManager
+            from core.agent import Agent # type: ignore
+            from core.input_manager import InputManager # type: ignore
             agent = Agent()
+            agent.testing_mode = True
             agent.input_manager = InputManager() 
             print(Fore.YELLOW + "Using local Horizon Desk core for testing.")
         except ImportError:
-            from horizonsdk import MockAgent
+            from horizonsdk import MockAgent # type: ignore
             agent = MockAgent()
             print(Fore.YELLOW + "Horizon Desk core not found. Using MockAgent for testing.")
         
@@ -585,11 +583,12 @@ def handle_run(raf_path):
 
         try:
             sys.path.append(project_root)
-            from core.agent import Agent
+            from core.agent import Agent # type: ignore
             agent = Agent()
-            print(Fore.YELLOW + "Using local Horizon Desk core for workshop.")
+            agent.testing_mode = True
+            print(Fore.YELLOW + "Using local Horizon Desk core for workshop (Testing Mode Active).")
         except ImportError:
-            from horizonsdk import MockAgent
+            from horizonsdk import MockAgent # type: ignore
             agent = MockAgent()
             print(Fore.YELLOW + "Horizon Desk core not found. Using MockAgent for workshop.")
 
@@ -602,7 +601,7 @@ def handle_run(raf_path):
 
         # 3. Launch GUI
         # The workshop folder is inside the package
-        import horizonsdk
+        import horizonsdk # type: ignore
         html_path = os.path.join(os.path.dirname(horizonsdk.__file__), "workshop", "index.html")
         url = f"file:///{html_path.replace(os.sep, '/')}"
         

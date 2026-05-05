@@ -1,8 +1,8 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="horizondesk-sdk",
-    version="1.2.0",
+    name="horizondesk_sdk",
+    version="1.4.0",
     packages=find_packages(),
     install_requires=[
         "requests",
@@ -14,6 +14,7 @@ setup(
     entry_points={
         'console_scripts': [
             'horizondesk-sdk=horizondesk_sdk.cli:main',
+            'horizondesk_sdk=horizondesk_sdk.cli:main',
         ],
     },
     author="Rapnss Team",

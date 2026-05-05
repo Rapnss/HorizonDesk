@@ -3,8 +3,8 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "horizondesk-sdk"   # change name (important)
-version = "1.2.0"                 # bump version
+name = "horizondesk_sdk"   # change name (important)
+version = "1.4.0"                 # bump version
 authors = [
     { name="Rapnss Team", email="admin@rapnss.in" },
 ]
@@ -29,6 +29,7 @@ dependencies = [
 
 [project.scripts]
 horizondesk-sdk = "horizondesk_sdk.cli:main"
+horizondesk_sdk = "horizondesk_sdk.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/rapnss/horizondesk-sdk"

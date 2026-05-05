@@ -1,0 +1,85 @@
+{
+    "name": "horizondesk-builder",
+    "displayName": "Horizon Desk Builder",
+    "description": "Powerful IDE for building and testing Horizon Desk AI Plugins.",
+    "version": "1.0.0",
+    "publisher": "Rapnss",
+    "engines": {
+        "vscode": "^1.75.0"
+    },
+    "categories": [
+        "Programming Languages",
+        "Debuggers",
+        "AI"
+    ],
+    "activationEvents": [],
+    "main": "./out/extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "horizondesk.runPlugin",
+                "title": "Horizon Desk: Run Plugin",
+                "icon": "$(play)"
+            },
+            {
+                "command": "horizondesk.installPlugin",
+                "title": "Horizon Desk: Install Locally",
+                "icon": "$(cloud-download)"
+            }
+        ],
+        "menus": {
+            "editor/title": [
+                {
+                    "when": "resourceFilename == horizon_plugin.raf",
+                    "command": "horizondesk.runPlugin",
+                    "group": "navigation"
+                }
+            ],
+            "view/title": [
+                {
+                    "command": "horizondesk.runPlugin",
+                    "when": "view == horizondesk-explorer",
+                    "group": "navigation"
+                }
+            ]
+        },
+        "viewsContainers": {
+            "activitybar": [
+                {
+                    "id": "horizondesk",
+                    "title": "Horizon Desk",
+                    "icon": "assets/icon.png"
+                }
+            ]
+        },
+        "views": {
+            "horizondesk": [
+                {
+                    "id": "horizondesk-explorer",
+                    "name": "Plugin Explorer",
+                    "icon": "$(explorer-view-icon)"
+                }
+            ]
+        },
+        "configuration": {
+            "title": "Horizon Desk",
+            "properties": {
+                "horizondesk.sdkPath": {
+                    "type": "string",
+                    "default": "horizondesk-sdk",
+                    "description": "Path to the Horizon Desk SDK CLI."
+                }
+            }
+        }
+    },
+    "scripts": {
+        "vscode:prepublish": "npm run compile",
+        "compile": "tsc -p ./",
+        "watch": "tsc -watch -p ./"
+    },
+    "devDependencies": {
+        "@types/node": "^16.18.126",
+        "@types/vscode": "^1.118.0",
+        "typescript": "^4.9.5"
+    }
+}

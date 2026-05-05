@@ -3,7 +3,7 @@ from .security import SecretStorage
 from .mock_agent import MockAgent
 from .credentials import save_credentials, load_credentials, clear_credentials, is_logged_in
 
-__version__ = "1.2.0"
+__version__ = "1.4.0"
 
 __all__ = ["BaseTool", "HorizonPlugin", "SecretStorage", "MockAgent",
            "save_credentials", "load_credentials", "clear_credentials", "is_logged_in"]

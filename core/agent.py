@@ -1,19 +1,83 @@
 import re
 import json
+import threading
+import concurrent.futures
 from colorama import Fore, Style
 from .llm import LLMProvider
+from .security.shilden import shilden
+import re
+import os
 
 class Agent:
-    def __init__(self):
-        self.llm = LLMProvider()
-        self.tools = {} # Map tool_name -> tool_instance
-        self.history = []
-        self.max_steps = 200 # Increased for Gmail Agent / Long Tasks (was 25)
-        self.input_manager = None # Will be injected by main.py
+    def _broadcast_swarm_task(self, sub_task):
+        """[v2.0] Broadcasts a sub-task to the Global Horizon Relay."""
+        from core.horizon_online import get_client
+        client = get_client()
+        if not client.team_code:
+            return None # Fallback to local execution
+            
+        print(Fore.MAGENTA + f"[Global Swarm] Broadcasting task: {sub_task[:50]}...")
+        # Find a suitable member
+        members = client.get_members()
+        for m in members:
+            if m['id'] != client.member_id and m['status'] == 'online':
+                # Assign task to the first available online member
+                res = client.assign_task(m['id'], sub_task)
+                if res.get('success'):
+                    return f"Task delegated to global team member {m['id']} ({m['role']}). Waiting for result..."
+        return None
+
+    def _execute_swarm(self, user_input):
+        # Determine Swarm Mode from settings
+        swarm_mode = self.memory_system.get_setting("swarm_mode", "local")
         
-        # Persistent Memory System to avoid repeated connection overhead/leaks
+        # Parse the input into sub-tasks using the graph generator
+        from core.task_graph import TaskGraphGenerator
+        graph = TaskGraphGenerator(self).generate(user_input)
+        
+        results = []
+        for task in graph:
+            # 1. Try Global Swarm if enabled
+            if swarm_mode == "global":
+                broadcast_res = self._broadcast_swarm_task(task)
+                if broadcast_res:
+                    results.append(broadcast_res)
+                    continue
+            
+            # 2. Fallback to Local Swarm Node
+            sub_agent = self.clone()
+            results.append(sub_agent.run(task))
+            
+        return "\n---\n".join(results)
+
+    def __init__(self):
+        self.version = "4.1" # [v4.1] Unified version tracking
+        # Persistent Memory System
         from core.memory import MemorySystem
         self.memory_system = MemorySystem()
+        
+        # Initialize LLM with memory system reference
+        self.llm = LLMProvider(memory_system=self.memory_system, agent=self)
+        
+        # Omniagent v4 Neural Forge
+        from core.dynamic_tools import DynamicToolManager
+        self.dynamic_tool_manager = DynamicToolManager(self)
+        
+        from core.neuron_memory import NeuronMemory
+        self.neuron_memory = NeuronMemory()
+        
+        self.tools = {} # Map tool_name -> tool_instance
+        self.history = []
+
+        # Workspace Directory
+        import os
+        home = os.path.expanduser("~")
+        self.workspace_path = os.path.join(home, "Documents", "HorizonWorkspaces")
+        if not os.path.exists(self.workspace_path):
+            try:
+                os.makedirs(self.workspace_path, exist_ok=True)
+            except:
+                pass
         
         # Real-time Hooks for SDK Workshop
         self._thought_callback = None
@@ -21,22 +85,131 @@ class Agent:
         self._observation_callback = None
         self._stream_callback = None
         self._log_callback = None
+        self.max_steps = 30 # Upgraded to 30 for v4 Swarm stability
+        self.swarm_enabled = True # Omniagent v4 Default
+        self.input_manager = None
+        self.plugin_info = {}
+        self.training_mode = False  # Set True to auto-approve SHILDEN gates
+        self.testing_mode = False   # Set True to restrict Rapnss inference during plugin testing
 
-    def _stream_response(self, text):
-        """Helper to stream the final text out if a callback exists."""
-        if self._stream_callback and text:
-            import time
-            words = text.split(' ')
-            chunk_size = 4
-            for i in range(0, len(words), chunk_size):
-                chunk = ' '.join(words[i:i + chunk_size]) + ' '
-                self._stream_callback(chunk)
-                time.sleep(0.05)  # Simulate typing delay
-        return text
+    def clone(self):
+        """Creates a lightweight clone for swarm sub-nodes.
+        Shares parent's LLM, tools, and memory — but has independent history.
+        Does NOT re-initialize DynamicToolManager or MemorySystem."""
+        new_agent = object.__new__(Agent)  # Skip __init__ entirely
+        new_agent.memory_system = self.memory_system  # Share, don't recreate
+        new_agent.llm = self.llm  # Share LLM instance (thread-safe)
+        new_agent.dynamic_tool_manager = self.dynamic_tool_manager  # Share
+        new_agent.neuron_memory = self.neuron_memory  # Share learned patterns
+        new_agent.tools = self.tools.copy()  # Copy tool registry
+        new_agent.history = []  # Independent conversation history
+        new_agent.workspace_path = self.workspace_path
+        new_agent.role = getattr(self, 'role', 'Swarm Node')
+        new_agent._thought_callback = None
+        new_agent._action_callback = None
+        new_agent._observation_callback = None
+        new_agent._stream_callback = None
+        new_agent._log_callback = None
+        new_agent.max_steps = 15  # Sub-nodes get fewer steps
+        new_agent.swarm_enabled = False  # CRITICAL: prevents infinite recursion
+        new_agent.input_manager = self.input_manager
+        new_agent.plugin_info = self.plugin_info
+        new_agent.training_mode = self.training_mode
+        return new_agent
+
+    def _stream_response(self, content):
+        """
+        Streams content to the UI callback. 
+        Supports both raw strings (simulated) and iterators (real-time LLM stream).
+        """
+        if not self._stream_callback or not content:
+            return content
+
+        import time
+        import types
+
+        # Case A: Real-time Iterator (LLM Stream)
+        if isinstance(content, (types.GeneratorType, map, filter)):
+            full_text = ""
+            for chunk in content:
+                if chunk:
+                    self._stream_callback(chunk)
+                    full_text += chunk
+            return full_text
+
+        # Case B: Legacy String (Simulated typing)
+        words = str(content).split(' ')
+        chunk_size = 4
+        for i in range(0, len(words), chunk_size):
+            chunk = ' '.join(words[i:i + chunk_size]) + ' '
+            self._stream_callback(chunk)
+            time.sleep(0.02)  # Reduced delay for snappier feel
+        return content
 
     def register_tool(self, tool):
         self.tools[tool.name] = tool
 
+    def _call_llm_with_streaming_parse(self, prompt, system_prompt):
+        """
+        Calls LLM with streaming enabled. 
+        Parses Thought/Action/Final Answer on the fly.
+        """
+        caps = self.llm.get_capabilities()
+        if not caps.get("streaming"):
+             # Fallback for non-streaming providers (like legacy Rapnss neurons)
+             return self.llm.generate_text(prompt, system_prompt=system_prompt)
+
+        stream = self.llm.generate_stream(prompt, system_prompt=system_prompt)
+        
+        full_response = ""
+        final_answer_started = False
+        final_answer_buffer = ""
+        
+        print(Fore.CYAN + "[LLM Streaming] ", end="", flush=True)
+        
+        for chunk in stream:
+            if not chunk: continue
+            full_response += chunk
+            print(chunk, end="", flush=True) # Console log real-time
+            
+            # Detect Final Answer start
+            if "Final Answer:" in full_response and not final_answer_started:
+                final_answer_started = True
+                # Start streaming to UI
+                if self._stream_callback:
+                    # Get the part after "Final Answer:"
+                    parts = full_response.split("Final Answer:")
+                    initial_content = parts[-1].strip()
+                    if initial_content:
+                        self._stream_callback(initial_content)
+                continue
+
+            if final_answer_started:
+                if self._stream_callback:
+                    self._stream_callback(chunk)
+            
+            # Stop early if we have a full Action block and no more is needed
+            # (Optimization to save tokens/time)
+            if "Observation:" in full_response:
+                break
+        
+        print("\n" + Fore.RESET)
+        return full_response
+
+    def _get_neural_hints(self):
+        """Retrieves past successful patterns for the current context."""
+        # Simple implementation: look for the last question in history
+        last_q = self.history[0] if self.history and self.history[0].startswith("Question:") else ""
+        
+        # [v4.1] Ignore very short/generic prompts to prevent hallucination loops on greetings
+        if not last_q or len(last_q.replace("Question:", "").strip()) < 10:
+            return "No specific neural hints for this task yet."
+            
+        hint = self.neuron_memory.get_hint(last_q)
+        if hint:
+            return f"PROVEN PATTERN: For similar tasks, the following tool sequence was successful: {', '.join(hint)}. Prefer these tools if applicable."
+        return "No specific neural hints for this task yet."
+        
     def _build_system_prompt(self):
         import os
         import platform
@@ -54,8 +227,11 @@ class Agent:
         # OmniAgent Data Directory
         data_dir = os.path.join(os.environ.get('USERPROFILE', home), "AppData", "Local", "Omniagent")
         
-        # Memory Context
+        # Memory Context (Enhanced for v4.0 Infinite Memory)
         memory_context = self.memory_system.get_all_memories()
+        
+        # Semantic Instruction
+        semantic_hint = "[INFINITE MEMORY] Your memory now uses semantic vector search. If you can't find something via direct recall, use 'SearchMemory' tool with a descriptive query to perform a deep semantic lookup."
         
         # Load GUI Settings
         agent_name = self.memory_system.get_setting("agentName", "Horizon Agent")
@@ -86,7 +262,19 @@ class Agent:
         except ImportError:
             pass
 
-        persona_context = f"{persona_context}\n{market_instructions}\n{search_instructions}\n{reddit_instructions}"
+        media_instructions = """
+[MEDIA EMBEDDING]
+The Horizon GUI can render images directly in the chat. 
+If you find local image files (png, jpg, webp, gif), you MUST embed them using standard Markdown on a NEW LINE: 
+![Description](C:\\Path With Spaces\\To\\Image.png)
+
+Rules:
+1. Always use absolute paths.
+2. Put each image on a separate line for better rendering.
+3. The GUI handles spaces in paths automatically.
+"""
+
+        persona_context = f"{persona_context}\n{market_instructions}\n{search_instructions}\n{reddit_instructions}\n{media_instructions}"
 
         # Team Context for Horizon Online
         team_context = ""
@@ -148,20 +336,40 @@ You are a Team Member. Your goal is to complete your assigned tasks and help oth
                     app_tool._cache_apps()
                 app_names = list(app_tool.apps_map.keys())
                 if app_names:
-                    app_list = ", ".join(app_names[:150])
-                    if len(app_names) > 150:
-                        app_list += f", and {len(app_names) - 150} more..."
-                    installed_apps_context = f"\n[Installed Applications (Can be opened via LaunchApp)]\n{app_list}\n"
+                    # Truncate app list to save tokens (30 apps is plenty for context)
+                    app_list = ", ".join(app_names[:30])
+                    if len(app_names) > 30:
+                        app_list += f", and {len(app_names) - 30} more..."
+                    installed_apps_context = f"\n[Installed Apps (LaunchApp)]\n{app_list}\n"
 
         tool_descriptions = "\n".join([t.get_schema() for t in self.tools.values()])
-        prompt = f"""You are **{agent_name}**, powered by the **Horizon Stack**.
+        prompt = f"""You are **{agent_name}**, the Omniagent v4.0 "World Ruler" neural swarm.
 System Context:
 - OS: {os_info}
 - Current User: {user}
 - Current Time: {time_str}
 - Home Directory: {home}
 - OmniAgent Data Dir: {data_dir}
+- Workspace Directory: {self.workspace_path}
 - Current Working Directory: {cwd}
+
+{semantic_hint}
+
+[NEURAL HINTS]
+{self._get_neural_hints()}
+
+[WORKSPACE ENVIRONMENT]
+- You have a dedicated agentic workspace at: {self.workspace_path}
+- You SHOULD prioritize creating and managing files in this workspace.
+- If a user provides a relative path, resolve it against this workspace.
+- CRITICAL: To enable interactive "Run" and "Open Folder" buttons in the chat interface, you MUST include the **full absolute path** of any file you create or modify (e.g., C:/Users/.../file.py) in your Final Answer.
+
+[INTERACTIVE ACTIONS]
+- The user's GUI automatically detects file paths in your text.
+- Including a full path like `{self.workspace_path}/script.py` creates a "Run Script" button for the user.
+- Including a directory path like `{self.workspace_path}/Docs/` creates a "Show in Folder" button.
+- ALWAYS provide the full paths for a premium, agentic experience.
+
 
 [HORIZON PLUGINS]
 {getattr(self, 'plugin_info', 'No plugins loaded.')}
@@ -186,10 +394,18 @@ You are equipped with specialized layers to handle complex tasks:
 6.  **Automation Layer** (Playwright + Prefect): For browsing the web and scheduling tasks.
 
 ### 🛠️ TOOL USAGE PROTOCOLS
-1.  **Data Analysis**: Use `AnalyzeDataTool` for CSV/Excel files. DO NOT try to read them manually.
-2.  **Document Creation**: Use `CreateDocTool` or `CreatePresentationTool`.
-3.  **Knowledge**: Use `AskKnowledge` to query large folders of documents.
-4.  **Web Navigation**: Use `Browser*` tools (Playwright) exclusively.
+1.  **Web Information (CRITICAL — READ THIS)**:
+    - When the user asks for ANY information from the web (weather, news, prices, facts, etc.):
+      **ALWAYS use `SmartFetch`** — it searches, crawls, and extracts ACTUAL DATA from web pages.
+    - **NEVER just provide a link and tell the user to open it.** That defeats the purpose of AI.
+    - **NEVER use `OpenBrowserUrl` to answer an information question.** The user wants DATA, not a browser tab.
+    - Use `DownloadPage` if you already have a specific URL and need its content.
+    - Use `WebSearchMCP` or `SearchWeb` ONLY if you need raw search result links/snippets.
+    - **CORRECT**: User asks "What's the weather in Delhi?" → Use `SmartFetch` → Return the actual weather data.
+    - **INCORRECT**: User asks "What's the weather in Delhi?" → Open AccuWeather in browser. (WRONG! The user wants DATA!)
+2.  **Data Analysis**: Use `AnalyzeDataTool` for CSV/Excel files. DO NOT try to read them manually.
+3.  **Document Creation**: Use `CreateDocTool` or `CreatePresentationTool`.
+4.  **Knowledge**: Use `AskKnowledge` to query large folders of documents.
 5.  **Long-Term Memory**: 
     - Use `StoreMemory` to remember facts about the user (e.g. "I am busy on Tuesdays", "I like dark mode").
     - Use `SearchMemory` if you need past context not currently visible in the prompt.
@@ -198,35 +414,43 @@ You are equipped with specialized layers to handle complex tasks:
 {tool_descriptions}
 
 ### ⚠️ CRITICAL RULES (MUST FOLLOW)
-1. **TERMINATION PROTOCOL**: 
-   - To finish a task, you MUST use the phrase `Final Answer:` followed by your result.
-   - **`Final Answer` is NOT a tool.** Do NOT say `Action: Final Answer`.
-   - **`Inform` is NOT a tool.** Do NOT say `Action: Inform`.
-   - If you have the answer, just say `Final Answer: <your answer>` and STOP.
+  1. **REASONING PROTOCOL**:
+    - SHILDEN Security: All actions are monitored by the SHILDEN guard.
+    - If you have the answer, just say `Final Answer: <your answer>` and STOP.
+ 
+ 2. **MULTI-TASKING PROTOCOL**:
+    - If a user asks for multiple things (e.g. "Post a tweet AND tell me the weather"), treat them as independent sub-tasks.
+    - Do NOT let a failure in one tool stop you from fulfilling the rest of the request.
+    - Report successes for what you did, and clean errors for what you couldn't do.
+
+ 3. **STRICT TOOL LISTING**:
+    - You MUST ONLY use the names of tools listed in the "TOOL USAGE PROTOCOLS" and "SUPPORTED TOOLS" sections below.
+    - NEVER invent your own actions like `Wait`, `Sleep`, `Inform`, or `SearchWeb` unless they are explicitly listed in the registry.
 
 2. Do NOT repeat the "Question" in your output. Start directly with "Thought".
 2. Use the variables from 'System Context' (e.g., Home Directory) for file paths.
-3. **Chit-Chat Protocol**: If the user says "Hi", "Hello", "Who are you", or asks a general question, DO NOT use `Type` or `LaunchApp`.
+3. **Chit-Chat Protocol (STRICT)**: 
+   - If the user says "Hi", "Hello", "Who are you", or asks a general question, DO NOT use `Type`, `LaunchApp`, or any automation tools.
+   - IMMEDIATELY provide a Final Answer with a friendly response.
    - **CORRECT**: 
      Thought: User is greeting me.
-     Final Answer: Hello! I am Omniagent v3.0. How can I help you?
+     Final Answer: Hello! I am Omniagent v4.0 "World Ruler". My neural forge is hot and my swarm is ready. How can I help you?
    - **INCORRECT**:
      Action: LaunchApp ... (Wrong!)
+     Action: Type ... (Wrong!)
+     Thought: I should search for a greeting... (Wrong! Just answer!)
 
-    4. **Web Navigation Protocol (PLAYWRIGHT)**:
-    - **PLUGIN-FIRST RULE**: Before using the `Browser*` tools, check if a specialized Plugin (e.g., `Calculator`, `Canva`, `FileOps`) can solve the task. ALWAYS use Plugins first.
-    - **Preferred**: Use `Browser*` tools for web tasks only if no Plugin exists.
-    - **Search Engine Priority**: When searching for information, ALWAYS prioritize `WebSearchMCP` or `SearchWeb` (which use DuckDuckGo/Bing fallbacks) to avoid Google Captchas and bot detection.
-    - **Launch**: `BrowserOpen` (opens persistent browser).
-   - **Navigate**: `BrowserNavigate` "https://google.com".
-   - **Interact**: 
-     - `BrowserType` (selector="input[name='q']", text="query")
-     - `BrowserClick` (selector="button.submit")
-     - `BrowserScroll` (direction="down")
-   - **Scrape**: `BrowserScrape` (type="text")
-   - **Screenshot**: `BrowserScreenshot`
-   - **Fallback**: NONE. Do NOT use `LaunchApp` for the browser. `BrowserOpen` handles the persistent profile.
-     - **INCORRECT**: `LaunchApp` "chrome" (This opens a guest profile! STOP!)
+    4. **Web Navigation Protocol**:
+    - **DATA-FIRST RULE**: If the user wants INFORMATION, use `SmartFetch`. It crawls pages and returns extracted text.
+    - **BROWSER-LAST RULE**: Only use `Browser*` tools or `OpenBrowserUrl` if the user explicitly says "open", "show me", "navigate to", or needs to interact with a web page (login, fill form, click buttons).
+    - **Search Engine Priority**: Use `SmartFetch` for research. Use `WebSearchMCP` only if you need raw link lists.
+    - **Playwright Browser** (for interactive web tasks ONLY):
+      - `BrowserOpen` (opens persistent browser)
+      - `BrowserNavigate`, `BrowserType`, `BrowserClick`, `BrowserScroll`, `BrowserScrape`, `BrowserScreenshot`
+    - **Fallback**: NONE. Do NOT use `LaunchApp` for the browser.
+      - **INCORRECT**: `LaunchApp` "chrome" (This opens a guest profile! STOP!)
+    - **INCORRECT WORKFLOW**: User asks "weather in Delhi" → Agent uses `RunCommand` to open a URL (WRONG!)
+    - **CORRECT WORKFLOW**: User asks "weather in Delhi" → Agent uses `SmartFetch` → Returns actual temperature/conditions
      
 5. **Vision Protocol ("Analyze vs Source")**:
    - You have `LocateObject` (Grid Search) and `AnalyzeImage` (Full Screen).
@@ -395,7 +619,19 @@ Begin!
         return prompt
 
     def run(self, user_input):
+        # [v4.1] Hard Greeting Interceptor: Instant response for simple greetings
+        greetings = ["hi", "hello", "hey", "hola", "greetings", "good morning", "good afternoon", "good evening"]
+        if user_input.lower().strip().rstrip('?!.') in greetings:
+            return f"Hello! I am Omniagent v{self.version}. How can I assist you today?"
+
+        if self.swarm_enabled:
+            return self._execute_swarm(user_input)
+            
         print(Fore.GREEN + f"Agent assigned task: {user_input}")
+        
+        # SHILDEN Integrity Check
+        shilden.scan_environment()
+        
         self.history.append(f"Question: {user_input}")
         
         step_count = 0
@@ -417,8 +653,8 @@ Begin!
             if hasattr(self, 'input_manager') and self.input_manager:
                  self.input_manager.update_status("Thinking...", "Analyzing context...")
             
-            # Call LLM
-            response = self.llm.generate_text(full_prompt, system_prompt=system_prompt)
+            # Call LLM with Hyperloop Streaming Parser
+            response = self._call_llm_with_streaming_parse(full_prompt, system_prompt)
             if not response:
                 return "Error: LLM failed to respond."
             
@@ -427,9 +663,9 @@ Begin!
             # Sanitize response: Remove "Question: ..." if the LLM hallucinated it
             response = re.sub(r"^Question:.*$", "", response, flags=re.MULTILINE).strip()
             
-            print(Fore.MAGENTA + f"\n[LLM Response]:\n{response}\n")
-            if self._log_callback:
-                self._log_callback(f"[LLM Response]: {response[:200]}...")
+            # print(Fore.MAGENTA + f"\n[LLM Response]:\n{response}\n")
+            # if self._log_callback:
+            #     self._log_callback(f"[LLM Response]: {response[:200]}...")
             
             # Parse Response
             # The LLM sometimes hallucinates the entire flow (Action -> Observation -> Final Answer) in one go
@@ -437,10 +673,41 @@ Begin!
             # We MUST check for an Action first. If an Action exists, we execute it and ignore any
             # hallucinated observation or final answer that comes after it.
             
-            action_match = re.search(r"Action:\s*(.*?)\n", response)
+            action_match = re.search(r"Action:\s*([^\n]+)", response)
+            if not action_match or not action_match.group(1).strip():
+                action_match = re.search(r"Action:\s*\n\s*(?:Type:\s*)?([^\n]+)", response)
             
             if action_match:
                 action = action_match.group(1).strip()
+                
+                # [v4.1] Hallucination Intercept: If LLM outputs a descriptive sentence instead of a tool
+                # or garbled text like "Fin - Al Mark"
+                hallucination_phrases = ["no immediate action", "none", "no action", "waiting for", "i will", "i now know", "fin - al mark"]
+                if any(phrase in action.lower() for phrase in hallucination_phrases) and len(action.split()) > 2:
+                    print(Fore.YELLOW + f"Intercepted hallucinated action phrase: '{action}'")
+                    # Force transition to Final Answer check if this was meant to be the end
+                    if "Final Answer:" in response:
+                        pass # Let it fall through to Final Answer check
+                    else:
+                        observation = "Observation: Please proceed to Final Answer if the task is complete, or use a valid tool name."
+                        self.history.append(f"{response}\n{observation}")
+                        step_count += 1
+                        continue
+
+                # [v4.1] Repetition Detector: Catch and kill looping hallucinations
+                if len(self.history) > 3:
+                    # Look at previous turns to see if we are repeating the same Thought/Action
+                    last_turns = [h.split('Observation:')[0] for h in self.history[-3:]]
+                    if all(t == last_turns[0] for t in last_turns):
+                        print(Fore.RED + "[Critical] Repetitive hallucination detected. Killing turn.")
+                        return "I apologize, but I am experiencing a logic loop. Please try rephrasing your request."
+
+                if action.lower().startswith("type:") and len(action.strip()) > 5:
+                    action = action.split(":", 1)[1].strip()
+                elif action.lower() in ["type", "type:"]:
+                    action = "Type"
+                action = action.strip()
+                action_input_str = "" # Default empty string to avoid UnboundLocalError
                 
                 # Get everything after the *first* "Action Input:"
                 parts = response.split("Action Input:")
@@ -472,8 +739,6 @@ Begin!
                     if hasattr(self, 'input_manager') and self.input_manager:
                          self.input_manager.update_status(f"Executing: {action}", "Processing...")
                 
-                print(Fore.YELLOW + f"Attempting Action: {action} with Input: {action_input_str}")
-                
                 # INTERCEPT HALLUCINATIONS
                 if action.lower() in ["final answer", "inform", "report"]:
                     print(Fore.GREEN + "Intercepted hallucinated tool call. Terminating.")
@@ -491,7 +756,29 @@ Begin!
                     self.history.append(f"{step_thought}\nFinal Answer: {result_text}")
                     return self._stream_response(result_text)
 
-                if action not in self.tools:
+                # SHILDEN Action Verification
+                security_check = shilden.verify_action(action, action_input_str)
+                if security_check is False:
+                    observation = "[SHILDEN Error] Action blocked due to security concerns."
+                elif security_check == "PENDING":
+                    # In training mode: auto-approve to prevent blocking on input()
+                    if getattr(self, 'training_mode', False):
+                        print(Fore.YELLOW + f"[SHILDEN][TRAINING] Auto-approved: {action}")
+                        shilden.grant_trust(action, 1)
+                        # Fall through to tool execution below
+                    else:
+                        if self._action_callback:
+                            self._action_callback("APPROVE", f"Agent needs permission to run: {action} with {action_input_str[:50]}...")
+                        print(Fore.YELLOW + f"\n[SECURITY] ACTION REQUIRES APPROVAL: {action}")
+                        print(Fore.WHITE + f"Data: {action_input_str}")
+                        choice = input(Fore.BLUE + "Allow this action? (y/n): ").lower()
+                        if choice != 'y':
+                            observation = "[SHILDEN Error] User denied permission for this action."
+                        else:
+                            print(Fore.GREEN + "Action approved by user.")
+                            if action not in self.tools:
+                                observation = f"Error: Tool '{action}' not found."
+                elif action not in self.tools:
                     observation = f"Error: Tool '{action}' not found. Please try to answer without using this tool if possible, or use a different tool."
                 else:
                     try:
@@ -552,6 +839,16 @@ Begin!
 
                 # WORKSHOP HOOK
                 if self._observation_callback: self._observation_callback(observation)
+                
+                # Image Delivery Support: Detect direct image URLs in observation
+                # If a tool like UnsplashSearch returns a URL, we want to make sure it's 
+                # highly visible to the user.
+                if isinstance(observation, str):
+                    image_urls = re.findall(r'https?://[^\s<>"]+\.(?:jpg|jpeg|png|gif|webp)', observation)
+                    for img_url in image_urls:
+                        if "![image]" not in observation:
+                            observation += f"\n\n![Image Result]({img_url})"
+
                 # Truncate observation if too long to save tokens
                 obs_to_save = observation
                 if isinstance(observation, str) and len(observation) > 2000:
@@ -562,31 +859,31 @@ Begin!
                 step_str = f"{response}\nObservation: {obs_to_save}\n"
                 self.history.append(step_str)
                 
-                # Check for "Final Answer" in the ORIGINAL hallucinatory response
-                # If the LLM already thought it was done, we should respect that 
-                # AFTER performing the action it requested.
-                if "Final Answer:" in original_response:
-                    final_answer = original_response.split("Final Answer:")[-1].strip()
-                    print(Fore.GREEN + f"Final Answer detected in same turn as Action. Terminating.")
-                    
-                    # Log the final state
-                    self.history.append(f"Thought: Task completed after action.\nFinal Answer: {final_answer}")
-                    
-                    if hasattr(self, 'input_manager') and self.input_manager:
-                         self.input_manager.update_status("Task Completed", "Done.")
-                    return self._stream_response(final_answer)
+                # SDK v1.3.2: Removed immediate termination for hallucinated Final Answers.
+                # We always force the agent to see the REAL observation in the next turn 
+                # to prevent "False Success" reports when a tool fails silently or shadowing occurs.
+                pass
                      
             else:
                 # If no action found, check for Final Answer
                 if "Final Answer:" in response:
                     final_answer = response.split("Final Answer:")[-1].strip()
+                    
+                    # T9.5: Auto-learn successful pattern
+                    try:
+                        # Extract tools from history
+                        tools_used = re.findall(r"Action:\s*(.*?)\n", "\n".join(self.history))
+                        if tools_used:
+                            self.neuron_memory.log_pattern("general", user_input, tools_used, provider=self.llm.current_engine.__class__.__name__)
+                    except: pass
+
                     self.history.append(response)
                     
                     # UPDATE OVERLAY STATUS
                     if hasattr(self, 'input_manager') and self.input_manager:
                          self.input_manager.update_status("Task Completed", "Waiting for input...")
-                         
-                    return self._stream_response(final_answer)
+                    
+                    return final_answer
                     
                 # If no action and no final answer, usually the LLM is just chatting or failed format.
                 print(Fore.RED + "Agent did not output an action. Ending turn.")
@@ -596,3 +893,61 @@ Begin!
             step_count += 1
         
         return "Max steps reached."
+
+    def _execute_swarm(self, user_input):
+        """
+        Omniagent v4 Cortex-Driven Swarm Execution.
+        
+        Flow:
+          1. Complexity check — skip swarm for simple prompts
+          2. CortexPlanner decomposes into TaskGraph
+          3. SwarmExecutor runs tasks in parallel (respecting dependencies)
+          4. CortexSynthesizer merges results into final answer
+        """
+        from core.cortex_planner import CortexPlanner, is_complex
+        from core.task_graph import TaskGraph
+        from core.swarm_arbitration import SwarmExecutor, CortexSynthesizer
+
+        # --- Step 1: Complexity Gate ---
+        if not is_complex(user_input):
+            print(Fore.GREEN + "[Cortex] Simple prompt detected — skipping swarm.")
+            self.swarm_enabled = False
+            result = self.run(user_input)
+            self.swarm_enabled = True
+            return result
+
+        print(Fore.CYAN + "[Cortex] Complex prompt detected — activating Neural Swarm v4.0...")
+
+        # --- Step 2: Cortex Planner ---
+        planner = CortexPlanner(self.llm)
+        tool_names = list(self.tools.keys())
+        plan = planner.decompose(user_input, tool_names)
+
+        # Single-task fallback: just run sequentially
+        if len(plan) == 1:
+            print(Fore.YELLOW + "[Cortex] Single-task plan — running sequential.")
+            self.swarm_enabled = False
+            result = self.run(plan[0]["task"])
+            self.swarm_enabled = True
+            return result
+
+        # --- Step 3: Build TaskGraph ---
+        try:
+            graph = TaskGraph(plan)
+        except ValueError as e:
+            print(Fore.RED + f"[Cortex] Invalid task graph: {e}. Falling back to sequential.")
+            self.swarm_enabled = False
+            result = self.run(user_input)
+            self.swarm_enabled = True
+            return result
+
+        # --- Step 4: Execute via SwarmExecutor ---
+        executor = SwarmExecutor(self, max_workers=min(len(plan), 4))
+        executor.execute_graph(graph)
+
+        # --- Step 5: Synthesize via CortexSynthesizer ---
+        synthesizer = CortexSynthesizer(self.llm)
+        final_answer = synthesizer.synthesize(user_input, graph)
+
+        # Stream the final answer
+        return self._stream_response(final_answer)
